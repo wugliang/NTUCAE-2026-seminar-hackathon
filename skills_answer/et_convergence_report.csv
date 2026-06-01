@@ -1,0 +1,2 @@
+R_hat_statistic,MC_iteration_count,n_chains,assert_R-hat < 1.1 (convergence),"assert_coverage_95pct in [0.85, 1.0]",assert_mean_relative_uncertainty < 0.60,assert_N_MC >= 1000
+1.001564,1000,4,True,False,True,True
