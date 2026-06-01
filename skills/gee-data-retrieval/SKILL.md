@@ -1,11 +1,14 @@
 ---
 name: gee-data-retrieval
 description: >
-  Google Earth Engine (GEE) 資料擷取工作流程。當使用者需要從 GEE 取得氣候、
-  降雨、土地利用、植被指數或任何地理空間資料集時，必須載入此 Skill。
-  觸發情境包含：提到 ImageCollection、篩選日期範圍、選取波段、計算統計值、
-  mosaic、median composite、clip to region 等操作。
-  即使使用者只說「幫我抓 NDVI 資料」或「我要 CHIRPS 降雨量」，也應觸發此 Skill。
+  Google Earth Engine (GEE) 資料擷取工作流程。當使用者需要從 GEE 取得任何地理空間
+  資料集時，必須載入此 Skill。觸發情境包含：植被分析（NDVI、EVI、Sentinel-2、MODIS、
+  Landsat）、氣候水文（ERA5、GPM、CHIRPS、JRC 地表水）、土地利用（ESA WorldCover、
+  Dynamic World、MCD12Q1）、地形（SRTM、NASADEM、LST 地表溫度）、災害環境
+  （Sentinel-1 SAR、Sentinel-5P 空品、FIRMS 火災）。
+  提到 ImageCollection、filterDate、filterBounds、雲遮罩、mosaic、median composite、
+  clip、reduceRegion、scale 參數等操作時皆應觸發。
+  即使使用者只說「幫我抓 NDVI」、「我要看淹水範圍」、「給我空污資料」，也應觸發此 Skill。
 ---
 
 # GEE 資料擷取 Skill
@@ -26,26 +29,93 @@ description: >
 - **FeatureCollection**：向量資料，與 Image 分開處理
 - **ee.Date**：GEE 內部時間格式，字串須用 `ee.Date('YYYY-MM-DD')` 包覆
 
-### 常用資料集識別碼與注意事項
+---
 
-| 資料集 | GEE Asset ID | 空間解析度 | 時間解析度 | 關鍵波段 |
+### 資料集索引（依應用面向）
+
+#### 一、植被與農業
+
+| 資料集 | GEE Asset ID | 空間解析度 | 時間解析度 | 適用情境 |
 |--------|-------------|-----------|-----------|---------|
-| Landsat 8 SR | `LANDSAT/LC08/C02/T1_L2` | 30m | 16天 | SR_B2–B7, QA_PIXEL |
-| Sentinel-2 SR | `COPERNICUS/S2_SR_HARMONIZED` | 10–60m | 5天 | B2–B12, QA60 |
-| MODIS NDVI | `MODIS/061/MOD13A2` | 500m | 16天 | NDVI, EVI |
-| CHIRPS 降雨 | `UCSB-CHG/CHIRPS/DAILY` | ~5km | 每日 | precipitation |
-| ERA5 氣候 | `ECMWF/ERA5_LAND/DAILY_AGGR` | ~9km | 每日 | 依需求 |
-| ESA 土地利用 | `ESA/WorldCover/v200` | 10m | 年度 | Map |
-| SRTM 地形 | `USGS/SRTMGL1_003` | 30m | 靜態 | elevation |
+| Sentinel-2 SR | `COPERNICUS/S2_SR_HARMONIZED` | 10m | 5天 | 精準農業、小區域植被、紅邊波段分析 |
+| MODIS NDVI 16天 | `MODIS/061/MOD13A1` | 500m | 16天 | 長時序物候、大尺度季節趨勢 |
+| Landsat 8 SR | `LANDSAT/LC08/C02/T1_L2` | 30m | 16天 | 2013年後中尺度農林分析 |
+| Landsat 9 SR | `LANDSAT/LC09/C02/T1_L2` | 30m | 16天 | 2021年後，與 L8 波段相容 |
+
+**關鍵波段對照：**
+- Sentinel-2：`B4`=Red, `B8`=NIR, `B5/B6/B7`=Red Edge, `B11/B12`=SWIR
+- Landsat 8/9 SR：`SR_B4`=Red, `SR_B5`=NIR，DN 需套用 scale factor（×0.0000275 - 0.2）
+
+#### 二、氣候與水文
+
+| 資料集 | GEE Asset ID | 空間解析度 | 時間解析度 | 適用情境 |
+|--------|-------------|-----------|-----------|---------|
+| ERA5-Land 月 | `ECMWF/ERA5_LAND/MONTHLY_BY_HOUR` | ~9km | 每月 | 氣候變遷、長期趨勢 |
+| ERA5-Land 日 | `ECMWF/ERA5_LAND/DAILY_AGGR` | ~9km | 每日 | 日尺度溫度、土壤水、蒸發 |
+| GPM IMERG | `NASA/GPM_L3/IMERG_V07` | ~11km | 半小時/每日 | 暴雨事件、梅雨、水文逕流模擬 |
+| JRC 地表水 | `JRC/GSW1_4/GlobalSurfaceWater` | 30m | 月/年統計 | 湖泊河流變遷、永久/季節性水體判別 |
+
+**ERA5 版本選擇：** 依時間解析度需求選不同版本，`MONTHLY_BY_HOUR` 適合多年趨勢，`DAILY_AGGR` 適合事件分析。
+
+#### 三、土地利用變遷
+
+| 資料集 | GEE Asset ID | 空間解析度 | 時間解析度 | 適用情境 |
+|--------|-------------|-----------|-----------|---------|
+| ESA WorldCover 2020 | `ESA/WorldCover/v100` | 10m | 靜態（2020） | 高精度現況分類，11類 |
+| ESA WorldCover 2021 | `ESA/WorldCover/v200` | 10m | 靜態（2021） | 同上，更新版 |
+| Dynamic World | `GOOGLE/DYNAMICWORLD/V1` | 10m | 近即時 | 即時土地變化偵測、機率值輸出 |
+| MODIS 土地覆蓋年 | `MODIS/061/MCD12Q1` | 500m | 每年 | 2001年起逐年全球分類，長期都市化趨勢 |
+
+**Dynamic World 注意：** 輸出為各類別機率值，需 `.select('label')` 取分類結果，或用 `.select(['trees','built','water'...])` 取機率層。
+
+#### 四、地形與地表
+
+| 資料集 | GEE Asset ID | 空間解析度 | 時間解析度 | 適用情境 |
+|--------|-------------|-----------|-----------|---------|
+| SRTM DEM | `USGS/SRTMGL1_003` | 30m | 靜態 | 標準地形底圖，一行取坡度坡向 |
+| NASADEM | `NASA/NASADEM_HGT/001` | 30m | 靜態 | SRTM 升級版，填補資料空洞（Voids）|
+| MODIS LST 日 | `MODIS/061/MOD11A1` | 1km | 每日 | 都市熱島效應（UHI）、大範圍地溫監測 |
+
+**SRTM 快速地形計算：**
+```javascript
+var srtm = ee.Image('USGS/SRTMGL1_003');
+var terrain = ee.Terrain.products(srtm);  // 一次取得 elevation、slope、aspect
+```
+
+#### 五、災害與環境
+
+| 資料集 | GEE Asset ID | 空間解析度 | 時間解析度 | 適用情境 |
+|--------|-------------|-----------|-----------|---------|
+| Sentinel-1 SAR GRD | `COPERNICUS/S1_GRD` | 10m | ~6–12天 | 颱風淹水範圍、崩塌偵測（穿透雲層）|
+| Sentinel-5P NO₂ | `COPERNICUS/S5P/OFFL/L3_NO2` | ~3.5km | 每日 | 空氣污染、工業排放監測 |
+| Sentinel-5P SO₂ | `COPERNICUS/S5P/OFFL/L3_SO2` | ~3.5km | 每日 | 火山噴發、工業污染 |
+| FIRMS 火災 | `FIRMS` | 375m–1km | 近即時 | 林火偵測、燃燒範圍評估 |
+
+---
 
 ### 常見陷阱
 
 1. **Scale 參數**：呼叫 `.reduceRegion()` 或 `.sampleRegions()` 時**必須**明確指定 `scale`，
-   否則 GEE 會用預設值（通常是不合適的 1 度）導致錯誤或不合理結果
-2. **Cloud masking 順序**：先 mask 再 reduce，不是 reduce 再 mask
-3. **日期過濾**：`.filterDate()` 的結束日期為**排除**（exclusive），需 +1 天
-4. **ImageCollection ≠ Image**：永遠先 `.first()` 或 `.median()` 後再操作像素值
-5. **投影系統**：預設為 EPSG:4326，計算面積/距離前須轉換為公尺投影
+   否則 GEE 會用預設值導致錯誤或不合理結果
+
+2. **日期過濾 exclusive**：`.filterDate('2023-01-01', '2023-12-31')` **不包含** 12/31，
+   正確寫法為 `.filterDate('2023-01-01', '2024-01-01')`
+
+3. **ImageCollection ≠ Image**：永遠先 `.median()` / `.first()` 後再操作像素值，
+   不能對 ImageCollection 直接 `.clip()` 或 `.select()`
+
+4. **Landsat C02 Scale Factor**：SR 波段原始 DN 值必須轉換：`×0.0000275 + (-0.2)`，
+   未轉換直接計算 NDVI 會得到錯誤結果
+
+5. **Sentinel-2 DN → 反射率**：`divide(10000)` 後才是 0–1 的反射率值
+
+6. **Sentinel-1 無雲遮罩**：SAR 資料不需要也不能套用光學影像的雲遮罩函式，
+   但需用 `.filter(ee.Filter.eq('instrumentMode', 'IW'))` 篩選正確模式
+
+7. **ERA5 時間版本混用**：`MONTHLY_BY_HOUR` 與 `DAILY_AGGR` 的波段名稱不完全相同，
+   切換版本時需重新確認波段名稱
+
+8. **Dynamic World 是機率圖**：`label` 波段才是分類結果，直接取全部波段會拿到 9 個機率層
 
 ---
 
@@ -55,13 +125,13 @@ description: >
 
 ```
 必要輸入
-├── 資料集名稱或類型（例：Landsat 8、CHIRPS 降雨）
+├── 資料集名稱或類型（對照上方索引表選擇正確 Asset ID）
 ├── 時間範圍（起始日期、結束日期，格式 YYYY-MM-DD）
 ├── 研究區域（geometry 物件 或 asset path 或 描述）
 └── 目標波段或變數名稱
 
 選填輸入
-├── 雲覆蓋率閾值（Sentinel/Landsat 適用，預設 20%）
+├── 雲覆蓋率閾值（Sentinel-2/Landsat 適用，預設 20%）
 ├── 時間聚合方式（median、mean、sum、max，預設 median）
 └── 輸出 CRS（預設 EPSG:4326）
 ```
@@ -73,27 +143,26 @@ description: >
 ### Step 1：載入資料集，建立 ImageCollection
 
 ```javascript
-// 使用完整 Asset ID，避免縮寫
 var collection = ee.ImageCollection('ASSET_ID_HERE')
-  .filterDate('YYYY-MM-DD', 'YYYY-MM-DD')  // 注意結束日期 exclusive
-  .filterBounds(studyArea);                 // studyArea 為 geometry 物件
+  .filterDate('YYYY-MM-DD', 'YYYY-MM-DD')  // 結束日期 exclusive，需 +1 天
+  .filterBounds(studyArea);
+
+print('Collection size:', collection.size());  // 確認非空
 ```
 
-**驗證點**：印出 `print('Collection size:', collection.size())` 確認集合非空。
-
-### Step 2：雲遮罩（Landsat / Sentinel 適用）
+### Step 2：雲遮罩（光學影像適用）
 
 ```javascript
-// Landsat 8 C02 SR 雲遮罩
+// Landsat 8/9 C02 SR 雲遮罩 + Scale Factor 轉換
 function maskL8sr(image) {
   var qaMask = image.select('QA_PIXEL').bitwiseAnd(parseInt('11111', 2)).eq(0);
   var satMask = image.select('QA_RADSAT').eq(0);
   return image.updateMask(qaMask).updateMask(satMask)
-    .multiply(0.0000275).add(-0.2)  // 套用 scale factor（C02 必要）
+    .multiply(0.0000275).add(-0.2)
     .copyProperties(image, ['system:time_start']);
 }
 
-// Sentinel-2 雲遮罩（使用 QA60 波段）
+// Sentinel-2 SR 雲遮罩 + DN → 反射率
 function maskS2clouds(image) {
   var qa = image.select('QA60');
   var cloudBitMask = 1 << 10;
@@ -101,37 +170,39 @@ function maskS2clouds(image) {
   var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
     .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
   return image.updateMask(mask)
-    .divide(10000)  // Sentinel-2 DN → reflectance
+    .divide(10000)
     .copyProperties(image, ['system:time_start']);
 }
+
+// Sentinel-1 SAR：不套用雲遮罩，改篩選模式
+var s1 = ee.ImageCollection('COPERNICUS/S1_GRD')
+  .filter(ee.Filter.eq('instrumentMode', 'IW'))
+  .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
+  .filterDate('YYYY-MM-DD', 'YYYY-MM-DD')
+  .filterBounds(studyArea);
 ```
 
-### Step 3：波段計算（如 NDVI、EVI）
+### Step 3：指數計算（如 NDVI）
 
 ```javascript
-// NDVI 計算
+// 波段名稱依資料集對照上方索引表
 var addNDVI = function(image) {
-  var ndvi = image.normalizedDifference(['NIR_BAND', 'RED_BAND'])
-    .rename('NDVI');
-  return image.addBands(ndvi);
+  return image.addBands(
+    image.normalizedDifference(['NIR_BAND', 'RED_BAND']).rename('NDVI')
+  );
 };
-
 collection = collection.map(addNDVI);
 ```
 
-> 波段名稱依資料集而異，參見上方「常用資料集」表格。
-
-### Step 4：時間聚合，取得單一 Image
+### Step 4：時間聚合
 
 ```javascript
-// 依需求選擇聚合方式
-var compositeImage = collection.median();  // 推薦：對離群值不敏感
-// 或
-var compositeImage = collection.mean();
-var compositeImage = collection.sum();     // 適用降雨量累計
+var compositeImage = collection.median();  // 光學影像推薦，對雲殘影不敏感
+// var compositeImage = collection.sum();  // 降雨量累計用 sum
+// var compositeImage = collection.mean(); // 溫度等連續量用 mean
 ```
 
-### Step 5：裁切至研究區域
+### Step 5：裁切
 
 ```javascript
 var clipped = compositeImage.clip(studyArea);
@@ -139,16 +210,17 @@ var clipped = compositeImage.clip(studyArea);
 
 ### Step 6：自我驗證
 
-執行後列印以下資訊確認結果合理：
-
 ```javascript
-print('Image bands:', clipped.bandNames());
-print('Image CRS:', clipped.projection().crs());
-print('Sample pixel value:', clipped.sample({
-  region: studyArea,
-  scale: 30,   // 依資料集填入
-  numPixels: 5
-}));
+print('波段清單:', clipped.bandNames());
+print('CRS:', clipped.projection().crs());
+var stats = clipped.reduceRegion({
+  reducer: ee.Reducer.minMax(),
+  geometry: studyArea,
+  scale: 30,  // 依資料集解析度填入
+  maxPixels: 1e8
+});
+print('數值範圍檢查:', stats);
+// 光學反射率應在 0–1；NDVI 應在 -1–1；LST 應在合理溫度範圍
 ```
 
 ---
@@ -157,17 +229,18 @@ print('Sample pixel value:', clipped.sample({
 
 產出的程式碼必須滿足以下條件：
 
+- [ ] 使用上方索引表中的完整 Asset ID，不自行縮寫或猜測
 - [ ] `ee.ImageCollection` 已正確 reduce 為單一 `ee.Image`
-- [ ] 使用完整且正確的 Asset ID（可在 GEE Catalog 驗證）
-- [ ] 所有 `.reduceRegion()` / `.sampleRegions()` 皆明確指定 `scale`
-- [ ] 雲遮罩函式（如適用）在 reduce 之前套用
-- [ ] 輸出影像已使用 `.clip()` 限定範圍
-- [ ] 程式碼附有 `print()` 驗證步驟
+- [ ] 所有 `.reduceRegion()` / `.sampleRegions()` 明確指定 `scale`
+- [ ] Landsat/Sentinel-2 套用對應的 scale factor 轉換
+- [ ] 光學影像的雲遮罩在 reduce 之前套用；SAR 影像改用模式篩選
+- [ ] `.filterDate()` 結束日期已 +1 天（確保 inclusive）
+- [ ] 輸出影像已 `.clip()` 限定範圍
+- [ ] 包含 `print()` 驗證數值範圍合理性
 
 ---
 
 ## 參考資源
 
 - GEE 資料目錄：https://developers.google.com/earth-engine/datasets
-- Scale 選擇原則：`references/scale-guide.md`（待補充）
-- 各資料集波段對照：`references/band-reference.md`（待補充）
+- 各資料集詳細波段說明：`references/band-reference.md`（待補充）
