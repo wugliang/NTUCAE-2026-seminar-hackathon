@@ -1,0 +1,1 @@
+請用 Python 的 Google Earth Engine 套件，取得台灣 2022 年的衛星地表溫度資料，以縣市為單位計算年均溫，輸出為 CSV
